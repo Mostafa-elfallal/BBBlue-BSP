@@ -1,56 +1,82 @@
 # meta-blue-bsp
 
-A custom, highly optimized Board Support Package (BSP) layer for the **BeagleBone Blue** robotics board. 
-
-Unlike generic EVM configurations, this machine definition strips out heavy UI/touchscreen elements and is explicitly tailored for headless robotics applications. It relies on the standard TI device tree but automatically injects necessary Wi-Fi/Bluetooth firmware and produces a cleanly partitioned, flashable MicroSD card image.
+Yocto BSP layer for the BeagleBone Blue (TI AM335x, ARM Cortex-A8). It targets headless robotics use: the image keeps networking, USB and audio, drops the display and touchscreen support, and adds kernel drivers for the board's on-board sensors.
 
 ## Dependencies
 
-This layer depends on the Yocto Project core and the Texas Instruments hardware ecosystem. It must be stacked on top of the following layers:
+| Layer | Repository | Branch |
+|---|---|---|
+| `meta` (Poky) | git://git.yoctoproject.org/poky | whinlatter or scarthgap |
+| `meta-arm`, `meta-arm-toolchain` | git://git.yoctoproject.org/meta-arm | matching branch |
+| `meta-ti-bsp` | git://git.yoctoproject.org/meta-ti | matching branch |
 
-* **URI:** git://git.yoctoproject.org/poky
-* **branch:** whinlatter (or scarthgap)
-* **layers:** `meta`
+## Building
 
-* **URI:** git://git.yoctoproject.org/meta-arm
-* **branch:** master / whinlatter
-* **layers:** `meta-arm`, `meta-arm-toolchain`
-
-* **URI:** git://git.yoctoproject.org/meta-ti
-* **branch:** master / whinlatter
-* **layers:** `meta-ti-bsp`
-
-## Adding the Layer to Your Build
-
-To add this layer to your Yocto environment, use the `bitbake-layers` command from your `build` directory:
+From the build directory:
 
     bitbake-layers add-layer ../layers/meta-blue-bsp
 
-## Usage & Configuration
-
-To build an image using this BSP, you must set the machine in your `conf/local.conf` file:
+In `conf/local.conf`:
 
     MACHINE = "beaglebone-blue"
 
-Once configured, you can build a fully hardware-supported base image:
+Then:
 
     bitbake core-image-base
 
-### Flashing the Output
-By default, this layer produces a `.wic.xz` image format, which contains all necessary partitions and the bootloader.
-You can find the flashable output in:
-`tmp/deploy/images/beaglebone-blue/core-image-base-beaglebone-blue.wic.xz`
+The image is written to `tmp/deploy/images/beaglebone-blue/core-image-base-beaglebone-blue.wic.xz`. Write it to a microSD card with `dd` or a tool such as balenaEtcher, then hold the BOOT button while powering on to boot from the card.
 
-Flash this directly to a MicroSD card using tools like `dd`, BalenaEtcher, or Rufus. Hold the `BOOT` button on the BeagleBone Blue while powering on to force SD card booting.
+## Layer contents
 
-## Key Features & Customizations
+```
+conf/
+  layer.conf
+  machine/beaglebone-blue.conf          machine definition
+recipes-kernel/
+  linux/
+    linux-ti-staging_%.bbappend         device tree and kernel config changes
+    files/blue-uart-slots.cfg           kernel config fragment
+  blue-sensors/
+    blue-sensors-mod_1.0.bb             out-of-tree sensor modules
+    files/                              driver sources, ioctl header, Makefile
+```
 
-This layer applies specific overrides to the standard `meta-ti` AM335x architecture to optimize it for robotics:
+### Machine configuration
 
-1. **Lightweight Profile:** Drops UBI/UBIFS flash system generation and touchscreen drivers to save compilation time and rootfs space.
-2. **Robotics Hardware Enablement:** Hardcodes `wifi`, `bluetooth`, and `alsa` into `MACHINE_FEATURES`.
-3. **Firmware Auto-injection:** Automatically pulls in the proprietary, closed-source `linux-firmware-wl18xx` binary blobs required to initialize the WL1835MOD networking module on boot.
-4. **Standard Pin Multiplexing:** Utilizes the officially supported `am335x-boneblue.dtb` Device Tree provided natively by the `linux-ti-staging` kernel, ensuring perfect out-of-the-box compatibility with the PRUs and motor headers without requiring custom append recipes.
+- Based on `ti33x.inc` from meta-ti.
+- `MACHINE_FEATURES` limited to `apm usbgadget usbhost vfat ext2 wifi bluetooth alsa`.
+- Installs `linux-firmware-wl18xx` for the WL1835MOD Wi-Fi/Bluetooth module. This firmware is distributed by TI under its own licence terms.
+- Builds a WIC image (`sdimage-bootpart.wks`) plus a `tar.xz` root filesystem.
+- Boots through U-Boot extlinux with the custom device tree, root on `/dev/mmcblk0p2`, console on `ttyS0` at 115200 baud and `earlycon` on UART0.
+
+### Kernel and device tree
+
+The `linux-ti-staging` bbappend fetches the BeagleBoard device tree repository (branch `v6.18.x`) and builds `am335x-boneblue.dts` from it as `ti/omap/custom-blue.dtb`. It adds the `wkup_m3_ipc` firmware property that the BeagleBone Black device tree has, and fixes the `tps65217.dtsi` include paths.
+
+### UART0 console fix
+
+With the default configuration the board stopped printing after `Starting kernel...`. The AM335x has six UARTs, but the kernel allocated only five 8250 port slots (`CONFIG_SERIAL_8250_NR_UARTS=5`). UART0 sits on the `l4_wkup` bus, which is probed after the other UARTs, so it was left without a slot and failed with `unable to register 8250 port`. The console then went to UART5, the GPS header.
+
+`blue-uart-slots.cfg` raises `CONFIG_SERIAL_8250_NR_UARTS` and `CONFIG_SERIAL_8250_RUNTIME_UARTS` to 6, and the `earlycon` argument gives output from UART0 before the serial driver loads.
+
+## Sensor drivers
+
+`blue-sensors-mod` builds three I2C client drivers with `inherit module` and autoloads them at boot.
+
+| Module | Device | Device tree compatible | Character device |
+|---|---|---|---|
+| `blue_mpu9250` | MPU9250 accelerometer, gyroscope, temperature | `blue,mpu9250` | `/dev/blue-mpu9250` |
+| `blue_ak8963` | AK8963 magnetometer | `blue,ak8963` | `/dev/blue-ak8963` |
+| `blue_bmp280` | BMP280 temperature and pressure | `blue,bmp280` | `/dev/blue-bmp280` |
+
+Each driver registers an IIO device for raw channel reads and a misc character device. The character device returns raw register data on `read()` and supports the `ioctl`s defined in `blue_sensors_ioctl.h`.
+
+The AK8963 sits behind the MPU9250. The MPU9250 driver turns on the MPU9250's I2C bypass during probe and then creates the AK8963 client at address `0x0C`. The BMP280 driver reads the factory calibration data during probe and returns compensated temperature and pressure through its `ioctl`s.
+
+## License
+
+MIT, see `COPYING.MIT`. The kernel modules declare `MODULE_LICENSE("GPL")`.
 
 ## Maintainer
-* Created by: [M. ElFallal]
+
+Mostafa ElFallal
