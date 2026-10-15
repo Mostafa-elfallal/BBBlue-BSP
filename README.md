@@ -14,15 +14,21 @@ Yocto BSP layer for the BeagleBone Blue (TI AM335x, ARM Cortex-A8). It targets h
 
 From the build directory:
 
-    bitbake-layers add-layer ../layers/meta-blue-bsp
+```sh
+bitbake-layers add-layer ../layers/meta-blue-bsp
+```
 
 In `conf/local.conf`:
 
-    MACHINE = "beaglebone-blue"
+```sh
+MACHINE = "beaglebone-blue"
+```
 
 Then:
 
-    bitbake core-image-base
+```sh
+bitbake core-image-base
+```
 
 The image is written to `tmp/deploy/images/beaglebone-blue/core-image-base-beaglebone-blue.wic.xz`. Write it to a microSD card with `dd` or a tool such as balenaEtcher, then hold the BOOT button while powering on to boot from the card.
 
@@ -92,8 +98,10 @@ The AK8963 sits behind the MPU9250. The MPU9250 driver turns on the MPU9250's I2
 
 `blue-sensor-demo` is installed to `/usr/bin` and reads all three sensors through their character devices. It converts the raw values using the ranges the drivers set at probe (±2 g, ±250 °/s, 16-bit magnetometer output) and applies the AK8963 sensitivity adjustment.
 
-    blue-sensor-demo              # 10 samples, 500 ms apart
-    blue-sensor-demo -n 0 -i 100  # run until Ctrl+C, every 100 ms
+```sh
+blue-sensor-demo              # 10 samples, 500 ms apart
+blue-sensor-demo -n 0 -i 100  # run until Ctrl+C, every 100 ms
+```
 
 ## License
 
