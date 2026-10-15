@@ -39,6 +39,10 @@ recipes-kernel/
   blue-sensors/
     blue-sensors-mod_1.0.bb             out-of-tree sensor modules
     files/                              driver sources, ioctl header, Makefile
+recipes-apps/
+  blue-sensor-demo/
+    blue-sensor-demo_1.0.bb             user-space demo for the sensor drivers
+    files/blue-sensor-demo.c
 ```
 
 ### Machine configuration
@@ -69,9 +73,27 @@ With the default configuration the board stopped printing after `Starting kernel
 | `blue_ak8963` | AK8963 magnetometer | `blue,ak8963` | `/dev/blue-ak8963` |
 | `blue_bmp280` | BMP280 temperature and pressure | `blue,bmp280` | `/dev/blue-bmp280` |
 
-Each driver registers an IIO device for raw channel reads and a misc character device. The character device returns raw register data on `read()` and supports the `ioctl`s defined in `blue_sensors_ioctl.h`.
+Each driver registers an IIO device for raw channel reads and a misc character device. The character device returns raw register data on `read()`. The `ioctl` numbers are defined in `blue_sensors_ioctl.h`; the drivers currently implement:
+
+| Device | `ioctl` | Returns |
+|---|---|---|
+| MPU9250 | `BLUE_MPU_GET_ALL` | 14 raw bytes: accelerometer XYZ, temperature, gyroscope XYZ |
+| AK8963 | `BLUE_MAG_GET_RAW` | 7 raw bytes: XYZ data and ST2 status |
+| AK8963 | `BLUE_MAG_GET_ASA` | 3 factory sensitivity adjustment bytes |
+| BMP280 | `BLUE_BMP_GET_RAW` | 6 raw bytes: pressure and temperature |
+| BMP280 | `BLUE_BMP_GET_TEMP` | Compensated temperature, °C × 100 |
+| BMP280 | `BLUE_BMP_GET_PRESS` | Compensated pressure, Pa in Q24.8 |
+
+The remaining numbers in the header are reserved and return `-ENOTTY`.
 
 The AK8963 sits behind the MPU9250. The MPU9250 driver turns on the MPU9250's I2C bypass during probe and then creates the AK8963 client at address `0x0C`. The BMP280 driver reads the factory calibration data during probe and returns compensated temperature and pressure through its `ioctl`s.
+
+## Sensor demo
+
+`blue-sensor-demo` is installed to `/usr/bin` and reads all three sensors through their character devices. It converts the raw values using the ranges the drivers set at probe (±2 g, ±250 °/s, 16-bit magnetometer output) and applies the AK8963 sensitivity adjustment.
+
+    blue-sensor-demo              # 10 samples, 500 ms apart
+    blue-sensor-demo -n 0 -i 100  # run until Ctrl+C, every 100 ms
 
 ## License
 
